@@ -23,7 +23,7 @@ def drawing_process(packets_queue: mp.Queue):
 	# fig = plt.figure()
 	# fig.show()
 	g = nx.DiGraph()
-	net = Network()
+	net = Network(height="100%", width="100%")
 	
 	count = 0
 	while True:
@@ -38,12 +38,12 @@ def drawing_process(packets_queue: mp.Queue):
 
 		if count & 16 == 0:
 			net.from_nx(g)
-			net.show("graph.html")
+			net.show("graph.html", )
 	
 
 if __name__ == "__main__":
 	s = socket.socket()
-	s.bind(("127.0.0.1", 1234))
+	s.bind(("0.0.0.0", 1234))
 	s.listen()
 
 	packets_queue = mp.Queue()

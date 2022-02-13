@@ -7,6 +7,9 @@ import re
 import multiprocessing as mp
 import signal
 import sys
+import socket
+import pickle
+import json
 
 def signal_handler(sig, frame):
 		print('Stopping process...')
@@ -22,6 +25,15 @@ def check_port(port):
 		return port < 2**16
 	except:
 		return False
+
+def connect_to_server(server_ip, server_port):
+	try:
+		s = socket.socket()
+		s.connect((server_ip, int(server_port)))
+		return s
+	except Exception as e:
+		print(e)
+		exit(-2)
 
 # Placeholder to support multiprocessing, actual value is filled inside __main__
 INTERFACES = []
@@ -41,17 +53,27 @@ def main(interface, server_ip, server_port):
 		print("Server IP address or port is invalid.")
 		exit(-1)
 
-	# Only ip packets, filter packets sent from this agent to the server.
-	bpf_filter = f"ip and not (dst host {server_ip} and dst port {server_port})"
-	send_queue = mp.Queue()
-	mp.Process(target=capture_process, args=(interface, bpf_filter, send_queue, stop_event)).start()
+	while True:
+		server_socket = connect_to_server(server_ip, server_port)
+		if server_socket is None:
+			print("Failed connecting to remote server")
+			exit(-2)
 
-	while not stop_event.is_set():
-		pkt = send_queue.get()
-		print(pkt)
-	print("After while on firt process")
+		# Only ip packets, filter packets sent from this agent to the server.
+		bpf_filter = f"ip and not (dst host {server_ip} and dst port {server_port})"
+		send_queue = mp.Queue()
+		process = mp.Process(target=capture_process, args=(interface, bpf_filter, send_queue, stop_event, server_socket))
+		process.start()
+		process.join()
+		print("Process exited, starting again...")
 
-def capture_process(interface: str, bpf_filter: str, send_queue: mp.Queue, stop_event: mp.Event):
+
+	# while not stop_event.is_set():
+	# 	pkt = send_queue.get()
+	# 	print(pkt)
+	# print("After while on firt process")
+
+def capture_process(interface: str, bpf_filter: str, send_queue: mp.Queue, stop_event: mp.Event, server_socket: socket.socket):
 	# Start the live capture.
 	cap = pyshark.LiveCapture(
 		interface = interface,
@@ -60,10 +82,19 @@ def capture_process(interface: str, bpf_filter: str, send_queue: mp.Queue, stop_
 		bpf_filter=bpf_filter
 	)
 
-	pkt: pyshark.packet.packet_summary.PacketSummary
+	my_hostname = socket.gethostname()
+
+	# Start sniffing...
 	generator = cap.sniff_continuously()
+	pkt: pyshark.packet.packet_summary.PacketSummary
 	for pkt in generator:
-		send_queue.put(pkt)
+		print("Send packet")
+		serialized_pkt = json.dumps({"agent": my_hostname, "source": pkt.source, "dest": pkt.destination, "protocol": pkt.protocol})
+		if len(serialized_pkt) > 4096:
+			print("Error, packet is larger than 4KB")
+			exit(-3)
+		if server_socket.send(bytes(serialized_pkt, "utf8")) == 0:
+			return
 	print("After while on second process")
 
 if __name__ == "__main__":
